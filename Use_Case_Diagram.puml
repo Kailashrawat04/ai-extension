@@ -1,0 +1,30 @@
+@startuml Use Case Diagram for AI YouTube Summarizer
+
+actor "User" as User
+actor "Chrome Extension" as Extension
+actor "React Frontend" as Frontend
+actor "Flask Backend" as Backend
+actor "Hugging Face API" as HFAPI
+
+rectangle "AI YouTube Summarizer System" {
+    usecase "Summarize YouTube Video via Extension" as UC1
+    usecase "Summarize Text via Web Interface" as UC2
+    usecase "Summarize PDF via Web Interface" as UC3
+    usecase "Fetch Video Transcript" as UC4
+    usecase "Translate Non-English Content" as UC5
+    usecase "Generate Summary" as UC6
+}
+
+User --> UC1 : Interacts with extension on YouTube page
+User --> UC2 : Inputs text in React app
+User --> UC3 : Uploads PDF in React app
+Extension --> UC4 : Requests transcript from YouTube
+Extension --> Backend : Sends video URL for summarization
+Frontend --> Backend : Sends text/PDF for summarization
+Backend --> UC4 : Fetches transcript
+Backend --> UC5 : Translates if needed
+Backend --> UC6 : Calls AI for summarization
+Backend --> HFAPI : Uses for translation and summarization
+HFAPI --> Backend : Returns translated text/summary
+
+@enduml

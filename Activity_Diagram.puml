@@ -1,0 +1,32 @@
+@startuml Activity Diagram for YouTube Summarization
+
+start
+
+:User provides YouTube URL;
+
+if (Is URL valid?) then (yes)
+    :Extract video ID;
+    :Fetch video transcript from YouTube;
+    if (Transcript fetched successfully?) then (yes)
+        :Detect language of transcript;
+        if (Is language English?) then (no)
+            :Translate transcript to English using HF API;
+        else (yes)
+        endif
+        :Chunk the text for processing;
+        :Call Hugging Face API for summarization;
+        if (Summarization successful?) then (yes)
+            :Return summary to user;
+        else (no)
+            :Return error message;
+        endif
+    else (no)
+        :Return error: Transcript not available;
+    endif
+else (no)
+    :Return error: Invalid URL;
+endif
+
+stop
+
+@enduml

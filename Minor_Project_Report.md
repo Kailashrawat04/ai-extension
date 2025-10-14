@@ -31,7 +31,7 @@ The AI YouTube Summarizer is a web-based application designed to provide concise
 
 ### 1.1 Background
 
-In today's digital age, video content on platforms like YouTube has become a primary source of information, entertainment, and education. However, the increasing length and volume of such content often make it challenging for users to extract key insights efficiently. Traditional methods of content summarization are time-consuming and may not capture the nuances of multimedia presentations.
+In today's digital age, video content on platforms like YouTube has become a primary source of information, entertainment, and ed.ucation. However, the increasing length and volume of such content often make it challenging for users to extract key insights efficiently. Traditional methods of content summarization are time-consuming and may not capture the nuances of multimedia presentations
 
 ### 1.2 Project Overview
 

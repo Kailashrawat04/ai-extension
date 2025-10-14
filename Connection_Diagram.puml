@@ -1,0 +1,29 @@
+@startuml Connection Diagram for AI YouTube Summarizer
+
+package "Client Side" {
+    component "Chrome Extension" as Ext
+    component "React Web App\n(port 3000)" as React
+}
+
+package "Server Side" {
+    component "Flask Backend\n(port 5000)" as Flask
+}
+
+package "External Services" {
+    component "YouTube API" as YT
+    component "Hugging Face API" as HF
+}
+
+Ext --> Flask : HTTP requests\n(video URL)
+React --> Flask : HTTP requests\n(text/PDF/URL)
+
+Flask --> YT : Fetch transcript
+Flask --> HF : Summarization & Translation
+
+note right of Ext : Browser integration\nfor YouTube pages
+note right of React : Standalone web interface
+note right of Flask : Central server\nhandles AI processing
+note right of YT : Provides video transcripts
+note right of HF : AI models for\nsummarization & translation
+
+@enduml
