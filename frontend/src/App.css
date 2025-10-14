@@ -1,0 +1,124 @@
+/* Reset default browser styles */
+body {
+  margin: 0;
+  padding: 0;
+  font-family: "Segoe UI", sans-serif;
+  background-color: #f8fafc;
+  color: #1e293b;
+}
+
+/* Main container */
+.app {
+  max-width: 850px;
+  margin: 3rem auto;
+  padding: 2rem 2.5rem;
+  background-color: #ffffff;
+  border-radius: 15px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
+}
+
+/* Title */
+h1 {
+  text-align: center;
+  font-size: 2.2rem;
+  margin-bottom: 1rem;
+  color: #1e293b;
+}
+
+/* Mode Buttons */
+.mode-buttons {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 15px;
+  margin-bottom: 2rem;
+}
+
+.mode-buttons button {
+  padding: 12px 24px;
+  border: 2px solid #3b82f6;
+  background-color: #f0f9ff;
+  color: #3b82f6;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.mode-buttons button:hover {
+  background-color: #3b82f6;
+  color: white;
+}
+
+.mode-buttons .active {
+  background-color: #3b82f6;
+  color: white;
+}
+
+/* Inputs */
+textarea,
+input[type="text"],
+input[type="file"] {
+  width: 100%;
+  padding: 12px;
+  font-size: 1rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  margin-bottom: 1.5rem;
+  background-color: #f9fafb;
+  box-sizing: border-box;
+}
+
+/* Summarize button */
+button {
+  display: block;
+  background-color: #2563eb;
+  color: white;
+  font-size: 1rem;
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.25s ease;
+  margin: 0 auto;
+  font-weight: bold;
+}
+
+button:hover:enabled {
+  background-color: #1e40af;
+}
+
+button:disabled {
+  background-color: #94a3b8;
+  cursor: not-allowed;
+}
+
+/* Summary box */
+.summary {
+  margin-top: 2.5rem;
+  background-color: #f1f5f9;
+  border-left: 6px solid #0ea5e9;
+  padding: 1.2rem 1.5rem;
+  border-radius: 10px;
+  font-size: 1rem;
+}
+
+.summary h2 {
+  color: #0284c7;
+  margin-bottom: 0.75rem;
+}
+
+.summary p {
+  white-space: pre-wrap;
+  line-height: 1.6;
+  color: #334155;
+}
+button {
+  transition: all 0.2s ease-in-out;
+}
+button:hover {
+  transform: scale(1.05);
+}
+body {
+  background: linear-gradient(to right, #eef2f7, #f9fbfd);
+}
