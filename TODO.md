@@ -10,4 +10,4 @@
 - [x] Test the changes (manually or via logs) to verify translation is attempted for all languages.
 
 ## Progress Tracking
-- All steps completed.
+- All steps completed. Code updated to always attempt translation for any detected src_lang, with improved note handling for success/failure.
