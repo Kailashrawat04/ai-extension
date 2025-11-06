@@ -1,12 +1,3 @@
-# app.py
-# Flask backend supporting:
-#  - /summarize/text
-#  - /summarize/pdf
-#  - /summarize/youtube  --> fetch transcript (any language), translate to English if needed, then summarize
-#  - /summarize/youtube-debug (inspect runtime)
-#
-# Requirements: flask, flask-cors, requests, python-dotenv, youtube-transcript-api, pymupdf (optional)
-# Put HF_API_KEY=hf_xxx in .env
 
 import os
 import re
@@ -39,6 +30,8 @@ HF_API_KEY = os.getenv("HF_API_KEY")
 HF_SUMMARY_MODEL = os.getenv("HF_SUMMARY_MODEL", "sshleifer/distilbart-cnn-12-6")
 # fallback translation model name pattern: Helsinki-NLP/opus-mt-<src>-en
 TRANSLATION_MODEL_TEMPLATE = "Helsinki-NLP/opus-mt-{src}-en"
+# sentiment analysis model
+HF_SENTIMENT_MODEL = os.getenv("HF_SENTIMENT_MODEL", "cardiffnlp/twitter-roberta-base-sentiment-latest")
 
 app = Flask(__name__)
 CORS(app)
@@ -105,7 +98,7 @@ def hf_inference(model: str, inputs: str, timeout: int = HF_TIMEOUT):
     # For summarization we may pass parameters; caller can extend payload if needed.
     try:
         r = requests.post(
-            f"https://api-inference.huggingface.co/models/{model}",
+            f"https://router.huggingface.co/hf-inference/models/{model}",
             headers=headers,
             json=payload,
             timeout=timeout
@@ -132,7 +125,7 @@ def call_hf_summarize(text: str):
     for attempt in range(HF_RETRIES + 1):
         try:
             resp = requests.post(
-                f"https://api-inference.huggingface.co/models/{HF_SUMMARY_MODEL}",
+                f"https://router.huggingface.co/hf-inference/models/{HF_SUMMARY_MODEL}",
                 headers=headers,
                 json=payload_template,
                 timeout=HF_TIMEOUT
@@ -199,7 +192,7 @@ def call_hf_translate(text: str, src_lang: str):
             # try common output keys
             translated = None
             if isinstance(data, list) and len(data) and isinstance(data[0], dict):
-                # translation models often return {'translation_text': '...'} or {'generated_text': '...'}
+                # translation models often return {'translation_text': '...'} or {'generated_text': '...' }
                 translated = data[0].get("translation_text") or data[0].get("generated_text") or next((v for v in data[0].values() if isinstance(v, str)), None)
             elif isinstance(data, dict):
                 translated = data.get("translation_text") or data.get("generated_text") or next((v for v in data.values() if isinstance(v, str)), None)
@@ -216,6 +209,74 @@ def call_hf_translate(text: str, src_lang: str):
             return None
     # join and return
     return "\n".join(translated_chunks)
+
+def call_hf_sentiment(text: str):
+    """
+    Analyze sentiment of text using HF sentiment model.
+    Returns dict with 'label' (e.g., 'POSITIVE', 'NEGATIVE', 'NEUTRAL') and 'score' (confidence).
+    """
+    if not HF_API_KEY:
+        raise ValueError("HF_API_KEY not configured")
+    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+    payload = {"inputs": text}
+    try:
+        resp = requests.post(
+            f"https://router.huggingface.co/hf-inference/models/{HF_SENTIMENT_MODEL}",
+            headers=headers,
+            json=payload,
+            timeout=HF_TIMEOUT
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, list) and len(data) and isinstance(data[0], list):
+                # Some models return [[{'label': 'POSITIVE', 'score': 0.99}, ...]]
+                if len(data[0]) > 0:
+                    return data[0][0]  # Take the top sentiment
+            elif isinstance(data, list) and len(data) and isinstance(data[0], dict):
+                return data[0]
+            elif isinstance(data, dict):
+                return data
+        logger.warning("Sentiment analysis failed: %s", resp.text)
+        return None
+    except Exception as e:
+        logger.warning("Sentiment analysis exception: %s", e)
+        return None
+
+def chunk_transcript_by_time(transcript_list, interval_seconds=30):
+    """
+    Chunk transcript into time intervals.
+    transcript_list: list of dicts with 'start', 'duration', 'text'
+    Returns list of dicts: [{'start': 0, 'end': 30, 'text': '...'}, ...]
+    """
+    if not transcript_list:
+        return []
+    chunks = []
+    current_start = 0
+    current_text = []
+    for item in transcript_list:
+        start = item.get('start', 0)
+        duration = item.get('duration', 0)
+        text = item.get('text', '').strip()
+        if not text:
+            continue
+        end = start + duration
+        while start >= current_start + interval_seconds:
+            if current_text:
+                chunks.append({
+                    'start': current_start,
+                    'end': current_start + interval_seconds,
+                    'text': ' '.join(current_text)
+                })
+                current_text = []
+            current_start += interval_seconds
+        current_text.append(text)
+    if current_text:
+        chunks.append({
+            'start': current_start,
+            'end': current_start + interval_seconds,
+            'text': ' '.join(current_text)
+        })
+    return chunks
 
 # ---------------- Routes ----------------
 
@@ -271,6 +332,7 @@ def summarize_youtube():
     video_url = data.get("video_url")
     if not video_url:
         return jsonify({"error": "No video URL provided"}), 400
+    mood_analysis = request.args.get("mood", "false").lower() == "true"
 
     video_id = extract_video_id(video_url)
     if not video_id:
@@ -372,8 +434,8 @@ def summarize_youtube():
     if transcript_obj is None:
         return jsonify({"error": "Failed to fetch transcript — see server logs for attempted methods", "tried": tried_methods}), 500
 
-    # Normalize transcript_obj -> list of (text, language_code)
-    text_pieces = []
+    # Normalize transcript_obj -> list of dicts with timestamps and text
+    transcript_list = []
     transcript_language = None
 
     try:
@@ -413,13 +475,17 @@ def summarize_youtube():
             except Exception as e:
                 logger.warning("Error handling TranscriptList: %s", e)
 
-        # FetchedTranscript: .snippets and video-level language_code
+        # Extract transcript_list with timestamps
         if hasattr(transcript_obj, "snippets"):
             # try to get language code on object
             transcript_language = getattr(transcript_obj, "language_code", None) or getattr(transcript_obj, "language", None)
             for sn in getattr(transcript_obj, "snippets") or []:
                 if isinstance(sn, dict) and "text" in sn:
-                    text_pieces.append(sn["text"])
+                    transcript_list.append({
+                        'start': sn.get('start', 0),
+                        'duration': sn.get('duration', 0),
+                        'text': sn["text"]
+                    })
                 elif hasattr(sn, "text"):
                     t = getattr(sn, "text")
                     if callable(t):
@@ -428,10 +494,14 @@ def summarize_youtube():
                         except Exception:
                             pass
                     if isinstance(t, str):
-                        text_pieces.append(t)
+                        transcript_list.append({
+                            'start': getattr(sn, 'start', 0),
+                            'duration': getattr(sn, 'duration', 0),
+                            'text': t
+                        })
 
         # TranscriptList: check generated/manually transcripts (fallback if find_transcript didn't work)
-        if not text_pieces and hasattr(transcript_obj, "generated_transcripts"):
+        if not transcript_list and hasattr(transcript_obj, "generated_transcripts"):
             gens = getattr(transcript_obj, "generated_transcripts") or []
             for g in gens:
                 lc = getattr(g, "language_code", None) or getattr(g, "language", None)
@@ -440,11 +510,19 @@ def summarize_youtube():
                 if hasattr(g, "snippets"):
                     for sn in getattr(g, "snippets") or []:
                         if hasattr(sn, "text"):
-                            text_pieces.append(str(getattr(sn, "text")))
+                            transcript_list.append({
+                                'start': getattr(sn, 'start', 0),
+                                'duration': getattr(sn, 'duration', 0),
+                                'text': str(getattr(sn, "text"))
+                            })
                         elif isinstance(sn, dict) and "text" in sn:
-                            text_pieces.append(sn["text"])
+                            transcript_list.append({
+                                'start': sn.get('start', 0),
+                                'duration': sn.get('duration', 0),
+                                'text': sn["text"]
+                            })
 
-        if not text_pieces and hasattr(transcript_obj, "manually_created_transcripts"):
+        if not transcript_list and hasattr(transcript_obj, "manually_created_transcripts"):
             mans = getattr(transcript_obj, "manually_created_transcripts") or []
             for m in mans:
                 lc = getattr(m, "language_code", None) or getattr(m, "language", None)
@@ -453,15 +531,27 @@ def summarize_youtube():
                 if hasattr(m, "snippets"):
                     for sn in getattr(m, "snippets") or []:
                         if hasattr(sn, "text"):
-                            text_pieces.append(str(getattr(sn, "text")))
+                            transcript_list.append({
+                                'start': getattr(sn, 'start', 0),
+                                'duration': getattr(sn, 'duration', 0),
+                                'text': str(getattr(sn, "text"))
+                            })
                         elif isinstance(sn, dict) and "text" in sn:
-                            text_pieces.append(sn["text"])
+                            transcript_list.append({
+                                'start': sn.get('start', 0),
+                                'duration': sn.get('duration', 0),
+                                'text': sn["text"]
+                            })
 
         # plain list of dicts or objects
-        if not text_pieces and isinstance(transcript_obj, (list, tuple)):
+        if not transcript_list and isinstance(transcript_obj, (list, tuple)):
             for it in transcript_obj:
                 if isinstance(it, dict) and "text" in it:
-                    text_pieces.append(it["text"])
+                    transcript_list.append({
+                        'start': it.get('start', 0),
+                        'duration': it.get('duration', 0),
+                        'text': it["text"]
+                    })
                 elif hasattr(it, "text"):
                     t = getattr(it, "text")
                     if callable(t):
@@ -470,7 +560,11 @@ def summarize_youtube():
                         except Exception:
                             pass
                     if isinstance(t, str):
-                        text_pieces.append(t)
+                        transcript_list.append({
+                            'start': getattr(it, 'start', 0),
+                            'duration': getattr(it, 'duration', 0),
+                            'text': t
+                        })
                 # try to detect language_code on items
                 if not transcript_language:
                     if isinstance(it, dict):
@@ -479,28 +573,38 @@ def summarize_youtube():
                         transcript_language = getattr(it, "language_code", None) or getattr(it, "language", None)
 
         # fallback: try get_lines or get_transcript if available
-        if not text_pieces:
+        if not transcript_list:
             if hasattr(transcript_obj, "get_lines"):
                 lines = transcript_obj.get_lines() or []
                 for ln in lines:
                     if isinstance(ln, dict) and "text" in ln:
-                        text_pieces.append(ln["text"])
+                        transcript_list.append({
+                            'start': ln.get('start', 0),
+                            'duration': ln.get('duration', 0),
+                            'text': ln["text"]
+                        })
             elif hasattr(transcript_obj, "get_transcript"):
                 maybe = transcript_obj.get_transcript()
                 if isinstance(maybe, (list, tuple)):
                     for it in maybe:
                         if isinstance(it, dict) and "text" in it:
-                            text_pieces.append(it["text"])
+                            transcript_list.append({
+                                'start': it.get('start', 0),
+                                'duration': it.get('duration', 0),
+                                'text': it["text"]
+                            })
 
     except Exception as e:
         logger.exception("Error normalizing transcript object: %s", e)
         return jsonify({"error": "Error normalizing transcript", "detail": str(e)}), 500
 
-    if not text_pieces:
+    if not transcript_list:
         logger.error("Transcript fetched but no text extracted. Raw type: %s", type(transcript_obj))
         return jsonify({"error": "Transcript fetched but no text could be extracted", "raw_type": str(type(transcript_obj))}), 500
 
-    transcript_text = " ".join([p for p in text_pieces if p]).strip()
+    # Extract text for summarization
+    text_pieces = [item['text'] for item in transcript_list if item['text'].strip()]
+    transcript_text = " ".join(text_pieces).strip()
     if not transcript_text:
         return jsonify({"error": "Transcript empty after normalization"}), 404
 
@@ -568,13 +672,45 @@ def summarize_youtube():
             final_summary = call_hf_summarize("\n".join(chunk_summaries))
         else:
             final_summary = chunk_summaries[0]
-        # include language note in response metadata
-        return jsonify({
+
+        response = {
             "summary": final_summary,
             "note": summary_language_note,
             "transcript_language": src_lang or None,
             "tried_transcript_methods": tried_methods
-        })
+        }
+
+        # Mood analysis if requested
+        if mood_analysis:
+            try:
+                logger.info("Performing mood analysis on transcript intervals")
+                time_chunks = chunk_transcript_by_time(transcript_list, interval_seconds=30)
+                mood_intervals = []
+                for chunk in time_chunks:
+                    text = chunk.get('text', '').strip()
+                    if text:
+                        sentiment = call_hf_sentiment(text)
+                        if sentiment:
+                            mood_intervals.append({
+                                'start': chunk['start'],
+                                'end': chunk['end'],
+                                'mood': sentiment.get('label', 'UNKNOWN'),
+                                'score': sentiment.get('score', 0.0)
+                            })
+                        else:
+                            mood_intervals.append({
+                                'start': chunk['start'],
+                                'end': chunk['end'],
+                                'mood': 'UNKNOWN',
+                                'score': 0.0
+                            })
+                response["mood_intervals"] = mood_intervals
+                logger.info("Mood analysis completed with %d intervals", len(mood_intervals))
+            except Exception as e:
+                logger.warning("Mood analysis failed: %s", e)
+                response["mood_intervals"] = []
+
+        return jsonify(response)
     except Exception as e:
         logger.exception("Error during summarization: %s", e)
         return jsonify({"error": "Summarization failed", "detail": str(e)}), 500
