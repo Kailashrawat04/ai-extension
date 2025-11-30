@@ -22,7 +22,7 @@ from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, No
 load_dotenv()
 HF_API_KEY = os.getenv("HF_API_KEY")
 # default summarization model (Hugging Face)
-HF_SUMMARY_MODEL = os.getenv("HF_SUMMARY_MODEL", "sshleifer/distilbart-cnn-12-6")
+HF_SUMMARY_MODEL = os.getenv("HF_SUMMARY_MODEL", "facebook/bart-large-cnn")
 # fallback translation model name pattern: Helsinki-NLP/opus-mt-<src>-en
 TRANSLATION_MODEL_TEMPLATE = "Helsinki-NLP/opus-mt-{src}-en"
 # sentiment analysis model
@@ -288,6 +288,10 @@ def home():
 def favicon():
     return send_from_directory("static", "favicon.ico")
 
+@app.route("/style.css")
+def style_css():
+    return "body { font-family: Arial, sans-serif; }", 200, {'Content-Type': 'text/css'}
+
 @app.route("/summarize/text", methods=["POST"])
 def summarize_text():
     data = request.json or {}
@@ -333,6 +337,8 @@ def summarize_youtube():
     if not video_url:
         return jsonify({"error": "No video URL provided"}), 400
     mood_analysis = request.args.get("mood", "false").lower() == "true"
+    if not HF_API_KEY:
+        return jsonify({"error": "HF_API_KEY not configured"}), 400
 
     video_id = extract_video_id(video_url)
     if not video_id:
