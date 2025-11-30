@@ -1,6 +1,0 @@
-﻿# Ignore environment variables and dependencies
-.env
-Backend/.env
-node_modules/
-.env.local
-.DS_Store
