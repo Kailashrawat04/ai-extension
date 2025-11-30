@@ -1,1 +1,5 @@
+<<<<<<< HEAD
 web: gunicorn src.backend.app:app
+=======
+web: gunicorn Backend.app:app
+>>>>>>> 726a2c7e5d160563d5848ff71f70b5f6bc8d8d35
