@@ -16,17 +16,13 @@ try:
 except Exception:
     fitz = None
 
-# Try to import common youtube_transcript_api errors (if available)
-try:
-    from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound, VideoUnavailable
-except Exception:
-    TranscriptsDisabled = NoTranscriptFound = VideoUnavailable = None
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound, VideoUnavailable
 
 # Load environment
 load_dotenv()
 HF_API_KEY = os.getenv("HF_API_KEY")
 # default summarization model (Hugging Face)
-HF_SUMMARY_MODEL = os.getenv("HF_SUMMARY_MODEL", "sshleifer/distilbart-cnn-12-6")
+HF_SUMMARY_MODEL = os.getenv("HF_SUMMARY_MODEL", "facebook/bart-large-cnn")
 # fallback translation model name pattern: Helsinki-NLP/opus-mt-<src>-en
 TRANSLATION_MODEL_TEMPLATE = "Helsinki-NLP/opus-mt-{src}-en"
 # sentiment analysis model
@@ -45,19 +41,24 @@ HF_RETRIES = 2
 def extract_video_id(url: str):
     if not url:
         return None
+    # Check if it's a direct video ID (11 chars, alphanumeric + _ -)
+    trimmed = url.strip()
+    if re.match(r'^[a-zA-Z0-9_-]{11}$', trimmed):
+        return trimmed
+    # Comprehensive patterns to match all YouTube URL formats (case-insensitive)
     patterns = [
-        r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})',
-        r'youtube\.com\/v\/([a-zA-Z0-9_-]{11})'
+        r'(?:https?://)?(?:www\.|m\.)?(?:youtube\.com/(?:watch\?v=|embed/|v/)|youtu\.be/)([a-zA-Z0-9_-]{11})(?:\S*)?',
+        r'(?:https?://)?(?:www\.|m\.)?youtube\.com/v/([a-zA-Z0-9_-]{11})(?:\S*)?',
+        r'v=([a-zA-Z0-9_-]{11})(?:&|\s|$)',
+        r'youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})',
+        r'youtu\.be/([a-zA-Z0-9_-]{11})',
+        r'youtube\.com/embed/([a-zA-Z0-9_-]{11})',
+        r'youtube\.com/v/([a-zA-Z0-9_-]{11})'
     ]
     for pattern in patterns:
-        m = re.search(pattern, url)
+        m = re.search(pattern, trimmed, re.IGNORECASE)
         if m:
             return m.group(1)
-    if "v=" in url:
-        try:
-            return url.split("v=")[1].split("&")[0]
-        except Exception:
-            return None
     return None
 
 def chunk_text(text: str, max_chars: int = 3000, overlap: int = 200):
@@ -287,6 +288,10 @@ def home():
 def favicon():
     return send_from_directory("static", "favicon.ico")
 
+@app.route("/style.css")
+def style_css():
+    return "body { font-family: Arial, sans-serif; }", 200, {'Content-Type': 'text/css'}
+
 @app.route("/summarize/text", methods=["POST"])
 def summarize_text():
     data = request.json or {}
@@ -332,292 +337,43 @@ def summarize_youtube():
     if not video_url:
         return jsonify({"error": "No video URL provided"}), 400
     mood_analysis = request.args.get("mood", "false").lower() == "true"
+    if not HF_API_KEY:
+        return jsonify({"error": "HF_API_KEY not configured"}), 400
 
     video_id = extract_video_id(video_url)
     if not video_id:
+        logger.warning("Failed to extract video ID from URL: %s", video_url)
         return jsonify({"error": "Invalid YouTube URL / could not extract ID"}), 400
 
-    # import module
     try:
-        yt_mod = importlib.import_module("youtube_transcript_api")
+        transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+    except TranscriptsDisabled:
+        return jsonify({"error": "Transcripts are disabled for this video"}), 400
+    except NoTranscriptFound:
+        return jsonify({"error": "No transcript found for this video"}), 404
+    except VideoUnavailable:
+        return jsonify({"error": "Video is unavailable"}), 404
     except Exception as e:
-        logger.exception("Failed to import youtube_transcript_api: %s", e)
-        return jsonify({"error": "youtube_transcript_api not installed or failed to import", "detail": str(e)}), 500
-
-    YTClass = getattr(yt_mod, "YouTubeTranscriptApi", None)
-    transcript_obj = None
-    tried_methods = []
-
-    # 1) Try instance methods (newer API)
-    if YTClass:
-        try:
-            inst = None
-            try:
-                inst = YTClass()
-            except Exception as e_inst:
-                logger.debug("Could not instantiate YouTubeTranscriptApi: %s", e_inst)
-            if inst:
-                # try common instance methods
-                for name in ("fetch", "list", "get_transcript", "get_transcripts", "list_transcripts"):
-                    if hasattr(inst, name) and callable(getattr(inst, name)):
-                        tried_methods.append(f"inst.{name}")
-                        try:
-                            fn = getattr(inst, name)
-                            # some functions expect list of ids
-                            try:
-                                transcript_obj = fn(video_id)
-                            except TypeError:
-                                transcript_obj = fn([video_id])
-                            logger.info("Used inst.%s", name)
-                            break
-                        except Exception as e:
-                            logger.warning("inst.%s failed: %s", name, e)
-                            transcript_obj = None
-        except Exception as e:
-            logger.debug("Instance method attempts raised: %s", e)
-
-    # 2) Try class methods
-    if transcript_obj is None and YTClass:
-        for name in ("get_transcript", "get_transcripts", "fetch", "list", "list_transcripts"):
-            if hasattr(YTClass, name) and callable(getattr(YTClass, name)):
-                tried_methods.append(f"YTClass.{name}")
-                try:
-                    fn = getattr(YTClass, name)
-                    try:
-                        transcript_obj = fn(video_id)
-                    except TypeError:
-                        transcript_obj = fn([video_id])
-                    logger.info("Used YTClass.%s", name)
-                    break
-                except Exception as e:
-                    logger.warning("YTClass.%s failed: %s", name, e)
-                    transcript_obj = None
-
-    # 3) Try module-level functions
-    if transcript_obj is None:
-        for name in ("get_transcript", "get_transcripts", "fetch_transcript", "list_transcripts"):
-            fn = getattr(yt_mod, name, None)
-            if callable(fn):
-                tried_methods.append(f"module.{name}")
-                try:
-                    try:
-                        transcript_obj = fn(video_id)
-                    except TypeError:
-                        transcript_obj = fn([video_id])
-                    logger.info("Used module.%s", name)
-                    break
-                except Exception as e:
-                    logger.warning("module.%s failed: %s", name, e)
-                    transcript_obj = None
-
-    # 4) internal _api
-    if transcript_obj is None:
-        try:
-            api_mod = importlib.import_module("youtube_transcript_api._api")
-            for name in ("fetch", "list", "get_transcript", "get_transcripts"):
-                fn = getattr(api_mod, name, None)
-                if callable(fn):
-                    tried_methods.append(f"_api.{name}")
-                    try:
-                        transcript_obj = fn(video_id)
-                        logger.info("Used _api.%s", name)
-                        break
-                    except Exception as e:
-                        logger.warning("_api.%s failed: %s", name, e)
-                        transcript_obj = None
-        except Exception as e:
-            logger.debug("_api import failed: %s", e)
-
-    logger.info("Transcript retrieval tried: %s", tried_methods)
-
-    if transcript_obj is None:
-        return jsonify({"error": "Failed to fetch transcript — see server logs for attempted methods", "tried": tried_methods}), 500
-
-    # Normalize transcript_obj -> list of dicts with timestamps and text
-    transcript_list = []
-    transcript_language = None
-
-    try:
-        # Handle TranscriptList: try to find and fetch a transcript
-        if hasattr(transcript_obj, "find_transcript"):
-            # TranscriptList - try to get the first available transcript
-            try:
-                # Try to find transcript in preferred languages: English first, then any available
-                available_langs = []
-                if hasattr(transcript_obj, "generated_transcripts"):
-                    available_langs.extend([t.language_code for t in transcript_obj.generated_transcripts if hasattr(t, "language_code")])
-                if hasattr(transcript_obj, "manually_created_transcripts"):
-                    available_langs.extend([t.language_code for t in transcript_obj.manually_created_transcripts if hasattr(t, "language_code")])
-
-                # Prefer English, then any language
-                preferred_langs = ["en"] + available_langs
-                transcript = None
-                for lang in preferred_langs:
-                    try:
-                        transcript = transcript_obj.find_transcript([lang])
-                        if transcript:
-                            break
-                    except Exception:
-                        continue
-
-                if transcript:
-                    # Now fetch the actual transcript content
-                    if hasattr(transcript, "fetch"):
-                        transcript = transcript.fetch()
-                    elif hasattr(transcript, "get_transcript"):
-                        transcript = transcript.get_transcript()
-                    # Now transcript should be the actual transcript object
-                    transcript_obj = transcript
-                    logger.info("Fetched transcript from TranscriptList")
-                else:
-                    logger.warning("Could not find any transcript in TranscriptList")
-            except Exception as e:
-                logger.warning("Error handling TranscriptList: %s", e)
-
-        # Extract transcript_list with timestamps
-        if hasattr(transcript_obj, "snippets"):
-            # try to get language code on object
-            transcript_language = getattr(transcript_obj, "language_code", None) or getattr(transcript_obj, "language", None)
-            for sn in getattr(transcript_obj, "snippets") or []:
-                if isinstance(sn, dict) and "text" in sn:
-                    transcript_list.append({
-                        'start': sn.get('start', 0),
-                        'duration': sn.get('duration', 0),
-                        'text': sn["text"]
-                    })
-                elif hasattr(sn, "text"):
-                    t = getattr(sn, "text")
-                    if callable(t):
-                        try:
-                            t = t()
-                        except Exception:
-                            pass
-                    if isinstance(t, str):
-                        transcript_list.append({
-                            'start': getattr(sn, 'start', 0),
-                            'duration': getattr(sn, 'duration', 0),
-                            'text': t
-                        })
-
-        # TranscriptList: check generated/manually transcripts (fallback if find_transcript didn't work)
-        if not transcript_list and hasattr(transcript_obj, "generated_transcripts"):
-            gens = getattr(transcript_obj, "generated_transcripts") or []
-            for g in gens:
-                lc = getattr(g, "language_code", None) or getattr(g, "language", None)
-                if not transcript_language and lc:
-                    transcript_language = lc
-                if hasattr(g, "snippets"):
-                    for sn in getattr(g, "snippets") or []:
-                        if hasattr(sn, "text"):
-                            transcript_list.append({
-                                'start': getattr(sn, 'start', 0),
-                                'duration': getattr(sn, 'duration', 0),
-                                'text': str(getattr(sn, "text"))
-                            })
-                        elif isinstance(sn, dict) and "text" in sn:
-                            transcript_list.append({
-                                'start': sn.get('start', 0),
-                                'duration': sn.get('duration', 0),
-                                'text': sn["text"]
-                            })
-
-        if not transcript_list and hasattr(transcript_obj, "manually_created_transcripts"):
-            mans = getattr(transcript_obj, "manually_created_transcripts") or []
-            for m in mans:
-                lc = getattr(m, "language_code", None) or getattr(m, "language", None)
-                if not transcript_language and lc:
-                    transcript_language = lc
-                if hasattr(m, "snippets"):
-                    for sn in getattr(m, "snippets") or []:
-                        if hasattr(sn, "text"):
-                            transcript_list.append({
-                                'start': getattr(sn, 'start', 0),
-                                'duration': getattr(sn, 'duration', 0),
-                                'text': str(getattr(sn, "text"))
-                            })
-                        elif isinstance(sn, dict) and "text" in sn:
-                            transcript_list.append({
-                                'start': sn.get('start', 0),
-                                'duration': sn.get('duration', 0),
-                                'text': sn["text"]
-                            })
-
-        # plain list of dicts or objects
-        if not transcript_list and isinstance(transcript_obj, (list, tuple)):
-            for it in transcript_obj:
-                if isinstance(it, dict) and "text" in it:
-                    transcript_list.append({
-                        'start': it.get('start', 0),
-                        'duration': it.get('duration', 0),
-                        'text': it["text"]
-                    })
-                elif hasattr(it, "text"):
-                    t = getattr(it, "text")
-                    if callable(t):
-                        try:
-                            t = t()
-                        except Exception:
-                            pass
-                    if isinstance(t, str):
-                        transcript_list.append({
-                            'start': getattr(it, 'start', 0),
-                            'duration': getattr(it, 'duration', 0),
-                            'text': t
-                        })
-                # try to detect language_code on items
-                if not transcript_language:
-                    if isinstance(it, dict):
-                        transcript_language = it.get("language_code") or it.get("language")
-                    else:
-                        transcript_language = getattr(it, "language_code", None) or getattr(it, "language", None)
-
-        # fallback: try get_lines or get_transcript if available
-        if not transcript_list:
-            if hasattr(transcript_obj, "get_lines"):
-                lines = transcript_obj.get_lines() or []
-                for ln in lines:
-                    if isinstance(ln, dict) and "text" in ln:
-                        transcript_list.append({
-                            'start': ln.get('start', 0),
-                            'duration': ln.get('duration', 0),
-                            'text': ln["text"]
-                        })
-            elif hasattr(transcript_obj, "get_transcript"):
-                maybe = transcript_obj.get_transcript()
-                if isinstance(maybe, (list, tuple)):
-                    for it in maybe:
-                        if isinstance(it, dict) and "text" in it:
-                            transcript_list.append({
-                                'start': it.get('start', 0),
-                                'duration': it.get('duration', 0),
-                                'text': it["text"]
-                            })
-
-    except Exception as e:
-        logger.exception("Error normalizing transcript object: %s", e)
-        return jsonify({"error": "Error normalizing transcript", "detail": str(e)}), 500
+        logger.exception("Error fetching transcript: %s", e)
+        return jsonify({"error": "Failed to fetch transcript", "detail": str(e)}), 500
 
     if not transcript_list:
-        logger.error("Transcript fetched but no text extracted. Raw type: %s", type(transcript_obj))
-        return jsonify({"error": "Transcript fetched but no text could be extracted", "raw_type": str(type(transcript_obj))}), 500
+        return jsonify({"error": "Transcript empty"}), 404
 
     # Extract text for summarization
     text_pieces = [item['text'] for item in transcript_list if item['text'].strip()]
     transcript_text = " ".join(text_pieces).strip()
     if not transcript_text:
-        return jsonify({"error": "Transcript empty after normalization"}), 404
+        return jsonify({"error": "Transcript empty"}), 404
 
-    # If language unknown, try to infer (simple heuristic: if any non-ascii present -> not en)
-    src_lang = (transcript_language or "").lower()
-    if not src_lang:
-        # heuristic: check presence of common ascii words - this is not reliable; we prefer to use what's available
-        sample = transcript_text[:200].lower()
-        if re.search(r'[^\x00-\x7f]', sample):
-            src_lang = "unknown_non_en"
-        else:
-            src_lang = "en"
+    # Infer language (simple heuristic: if any non-ascii present -> not en)
+    sample = transcript_text[:200].lower()
+    if re.search(r'[^\x00-\x7f]', sample):
+        src_lang = "unknown_non_en"
+    else:
+        src_lang = "en"
 
-    logger.info("Transcript language detected: %s (inferred/declared)", src_lang)
+    logger.info("Transcript language inferred: %s", src_lang)
 
     # Always attempt translation to English, regardless of detected language
     translated_text = None
@@ -675,8 +431,7 @@ def summarize_youtube():
         response = {
             "summary": final_summary,
             "note": summary_language_note,
-            "transcript_language": src_lang or None,
-            "tried_transcript_methods": tried_methods
+            "transcript_language": src_lang or None
         }
 
         # Mood analysis if requested
