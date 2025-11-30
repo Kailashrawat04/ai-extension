@@ -1,0 +1,7 @@
+flask
+flask-cors
+python-dotenv
+requests
+pymupdf
+youtube-transcript-api
+gunicorn
