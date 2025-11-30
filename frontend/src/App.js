@@ -3,7 +3,7 @@ import React, { useState } from "react";
 import axios from "axios";
 import "./App.css";
 
-const API_BASE = process.env.REACT_APP_API_URL || "https://ai-summarizer-backend-fgz11pf0v-kailashrawat04s-projects.vercel.app";
+const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5000";
 
 function App() {
   const [text, setText] = useState("");
