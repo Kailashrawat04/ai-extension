@@ -18,6 +18,20 @@ function App() {
 
   const MAX_PDF_BYTES = 10 * 1024 * 1024; // 10 MB
 
+  const isValidYouTubeURL = (url) => {
+    if (!url || !url.trim()) return false;
+    const trimmed = url.trim();
+    // Check if it's a direct video ID (11 chars, alphanumeric + _ -)
+    if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) return true;
+    // Check comprehensive YouTube URL patterns (case-insensitive)
+    const patterns = [
+      /(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?v=|embed\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})(?:\S*)?/i,
+      /(?:https?:\/\/)?(?:www\.|m\.)?youtube\.com\/v\/([a-zA-Z0-9_-]{11})(?:\S*)?/i,
+      /v=([a-zA-Z0-9_-]{11})(?:&|\s|$)/i
+    ];
+    return patterns.some(pattern => pattern.test(trimmed));
+  };
+
   const resetProgress = () => setProgress(0);
 
   const handleFileChange = (e) => {
@@ -34,7 +48,7 @@ function App() {
   const isInputValid = () => {
     if (mode === "text") return text.trim().length > 0;
     if (mode === "pdf") return file !== null;
-    if (mode === "youtube") return youtubeURL.trim().length > 0;
+    if (mode === "youtube") return isValidYouTubeURL(youtubeURL);
     return false;
   };
 

@@ -41,19 +41,24 @@ HF_RETRIES = 2
 def extract_video_id(url: str):
     if not url:
         return None
+    # Check if it's a direct video ID (11 chars, alphanumeric + _ -)
+    trimmed = url.strip()
+    if re.match(r'^[a-zA-Z0-9_-]{11}$', trimmed):
+        return trimmed
+    # Comprehensive patterns to match all YouTube URL formats (case-insensitive)
     patterns = [
-        r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})',
-        r'youtube\.com\/v\/([a-zA-Z0-9_-]{11})'
+        r'(?:https?://)?(?:www\.|m\.)?(?:youtube\.com/(?:watch\?v=|embed/|v/)|youtu\.be/)([a-zA-Z0-9_-]{11})(?:\S*)?',
+        r'(?:https?://)?(?:www\.|m\.)?youtube\.com/v/([a-zA-Z0-9_-]{11})(?:\S*)?',
+        r'v=([a-zA-Z0-9_-]{11})(?:&|\s|$)',
+        r'youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})',
+        r'youtu\.be/([a-zA-Z0-9_-]{11})',
+        r'youtube\.com/embed/([a-zA-Z0-9_-]{11})',
+        r'youtube\.com/v/([a-zA-Z0-9_-]{11})'
     ]
     for pattern in patterns:
-        m = re.search(pattern, url)
+        m = re.search(pattern, trimmed, re.IGNORECASE)
         if m:
             return m.group(1)
-    if "v=" in url:
-        try:
-            return url.split("v=")[1].split("&")[0]
-        except Exception:
-            return None
     return None
 
 def chunk_text(text: str, max_chars: int = 3000, overlap: int = 200):
@@ -331,6 +336,7 @@ def summarize_youtube():
 
     video_id = extract_video_id(video_url)
     if not video_id:
+        logger.warning("Failed to extract video ID from URL: %s", video_url)
         return jsonify({"error": "Invalid YouTube URL / could not extract ID"}), 400
 
     try:
