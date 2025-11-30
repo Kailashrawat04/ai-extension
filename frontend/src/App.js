@@ -3,7 +3,7 @@ import React, { useState } from "react";
 import axios from "axios";
 import "./App.css";
 
-const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:5000";
+const API_BASE = process.env.REACT_APP_API_URL || "https://ai-summarizer-backend-fgz11pf0v-kailashrawat04s-projects.vercel.app";
 
 function App() {
   const [text, setText] = useState("");
@@ -13,6 +13,8 @@ function App() {
   const [mode, setMode] = useState("text");
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [moodAnalysis, setMoodAnalysis] = useState(false);
+  const [moodIntervals, setMoodIntervals] = useState([]);
 
   const MAX_PDF_BYTES = 10 * 1024 * 1024; // 10 MB
 
@@ -70,7 +72,7 @@ function App() {
         });
       } else if (mode === "youtube") {
         res = await axios.post(
-          `${API_BASE}/summarize/youtube`,
+          `${API_BASE}/summarize/youtube${moodAnalysis ? '?mood=true' : ''}`,
           { video_url: youtubeURL },
           { timeout: 180000 }
         );
@@ -80,6 +82,11 @@ function App() {
       if (res && res.data) {
         if (res.data.summary) {
           setSummary(res.data.summary);
+          if (res.data.mood_intervals) {
+            setMoodIntervals(res.data.mood_intervals);
+          } else {
+            setMoodIntervals([]);
+          }
         } else if (res.data.error) {
           // server returned a structured error
           alert("Server error: " + res.data.error);
@@ -108,6 +115,7 @@ function App() {
     setFile(null);
     setYoutubeURL("");
     setSummary("");
+    setMoodIntervals([]);
     resetProgress();
   };
 
@@ -152,12 +160,23 @@ function App() {
         )}
 
         {mode === "youtube" && (
-          <input
-            type="text"
-            placeholder="Enter YouTube video URL..."
-            value={youtubeURL}
-            onChange={(e) => setYoutubeURL(e.target.value)}
-          />
+          <>
+            <input
+              type="text"
+              placeholder="Enter YouTube video URL..."
+              value={youtubeURL}
+              onChange={(e) => setYoutubeURL(e.target.value)}
+            />
+            <div className="mood-checkbox">
+              <input
+                type="checkbox"
+                id="moodAnalysis"
+                checked={moodAnalysis}
+                onChange={(e) => setMoodAnalysis(e.target.checked)}
+              />
+              <label htmlFor="moodAnalysis">Enable Mood Analysis</label>
+            </div>
+          </>
         )}
       </div>
 
@@ -174,6 +193,18 @@ function App() {
         <div className="summary">
           <h2>📝 Summary</h2>
           <pre style={{ whiteSpace: "pre-wrap" }}>{summary}</pre>
+          {moodIntervals.length > 0 && (
+            <div className="mood-analysis">
+              <h3>😊 Mood Analysis</h3>
+              <ul>
+                {moodIntervals.map((interval, index) => (
+                  <li key={index}>
+                    {interval.start}s - {interval.end}s: {interval.mood} (score: {interval.score.toFixed(2)})
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="summary-actions">
             <button
               onClick={() => {
